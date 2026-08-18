@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public example credentials and deterministic WireGuard test fixtures"
+targetRules = ["generic-api-key", "hashicorp-tf-password"]
+stopwords = [
+  "guest-key-1234",
+  "iot-key-5678",
+  "A1B2C3D4E5F6",
+  "F3JcsRyn9Hywwyhl4EznlV4ZThatbB5Hi4U9b3emM+g=",
+]

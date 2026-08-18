@@ -178,6 +178,54 @@ func Test_buildMinimalUpdateDevice_switchVLANEnabled(t *testing.T) {
 	})
 }
 
+// Test_buildMinimalUpdateDevice_stpSettings guards the minimal device update
+// payload used for switches. Priority zero is a valid root-bridge priority and
+// must remain explicit on the wire rather than being confused with an omitted
+// value.
+func Test_buildMinimalUpdateDevice_stpSettings(t *testing.T) {
+	t.Run("configured STP settings are sent including priority zero", func(t *testing.T) {
+		deviceReq := &unifi.Device{
+			ID:          "dev-1",
+			Type:        "usw",
+			MAC:         "aa:bb:cc:dd:ee:ff",
+			Name:        "Root Switch",
+			StpVersion:  "rstp",
+			StpPriority: ptrInt64(0),
+		}
+
+		body := buildMinimalUpdateDevice(deviceReq, nil, nil)
+		if body.StpVersion != "rstp" {
+			t.Fatalf("StpVersion = %q, want rstp", body.StpVersion)
+		}
+		if body.StpPriority == nil || *body.StpPriority != 0 {
+			t.Fatalf("StpPriority = %v, want explicit 0", body.StpPriority)
+		}
+
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"stp_version":"rstp"`) {
+			t.Errorf("PUT body missing stp_version: %s", raw)
+		}
+		if !strings.Contains(string(raw), `"stp_priority":0`) {
+			t.Errorf("PUT body missing explicit zero stp_priority: %s", raw)
+		}
+	})
+
+	t.Run("unset STP settings stay off the wire", func(t *testing.T) {
+		body := buildMinimalUpdateDevice(&unifi.Device{ID: "dev-1"}, nil, nil)
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), "stp_version") ||
+			strings.Contains(string(raw), "stp_priority") {
+			t.Errorf("unset STP settings leaked into PUT body: %s", raw)
+		}
+	})
+}
+
 // Test_buildMinimalUpdateDevice_vwireEnabled guards the radio_table[].vwire_enabled
 // bug class (the UI "Mesh Parent" toggle): the hand-listed minimal PUT never
 // copied radio_table across, so every radio sub-field — vwire_enabled included —

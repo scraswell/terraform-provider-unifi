@@ -1,0 +1,22 @@
+[tools]
+dagger = "0.21.8"
+
+[tasks.fmt]
+description = "Format provider source in the pinned Dagger environment"
+run = "dagger call format --src=. export --path=."
+
+[tasks.lint]
+description = "Lint provider source in the pinned Dagger environment"
+run = "dagger call lint --src=."
+
+[tasks.test]
+description = "Run provider unit tests with the race detector in Dagger"
+run = "dagger call test --src=."
+
+[tasks.build]
+description = "Build the provider in Dagger"
+run = "dagger call build --src=."
+
+[tasks.ci]
+description = "Run the complete pinned provider quality gate in Dagger"
+run = "dagger call ci --src=."
