@@ -977,6 +977,90 @@ func Test_deviceResource_reconcilePortOverrides(t *testing.T) {
 	}
 }
 
+func TestReconcilePortOverridesResolvesUnknownComputedValues(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	r := &deviceResource{}
+	idx := int64(8)
+	apiOverride := unifi.DevicePortOverrides{
+		PortIDX:                      &idx,
+		OpMode:                       "switch",
+		StpEdgeState:                 "enabled",
+		Autoneg:                      true,
+		EgressRateLimitKbpsEnabled:   false,
+		FlowControlEnabled:           true,
+		FullDuplex:                   true,
+		Isolation:                    false,
+		LldpmedEnabled:               true,
+		LldpmedNotifyEnabled:         false,
+		PortKeepaliveEnabled:         true,
+		PortSecurityEnabled:          false,
+		StormctrlBroadcastastEnabled: true,
+		StormctrlMcastEnabled:        false,
+		StormctrlUcastEnabled:        true,
+		StpPortMode:                  true,
+	}
+
+	apiSet, diags := r.portOverridesToFramework(ctx, []unifi.DevicePortOverrides{apiOverride})
+	if diags.HasError() {
+		t.Fatalf("building API set: %v", diags)
+	}
+	obj, ok := apiSet.Elements()[0].(types.Object)
+	if !ok {
+		t.Fatalf("API set element has type %T, want types.Object", apiSet.Elements()[0])
+	}
+	attrs := obj.Attributes()
+	computedBools := []string{
+		"autoneg",
+		"egress_rate_limit_kbps_enabled",
+		"flow_control_enabled",
+		"full_duplex",
+		"isolation",
+		"lldpmed_enabled",
+		"lldpmed_notify_enabled",
+		"port_keepalive_enabled",
+		"port_security_enabled",
+		"stormctrl_bcast_enabled",
+		"stormctrl_mcast_enabled",
+		"stormctrl_ucast_enabled",
+		"stp_port_mode",
+	}
+	for _, name := range computedBools {
+		attrs[name] = types.BoolUnknown()
+	}
+	plannedObject, objectDiags := types.ObjectValue(portOverrideAttrTypes(), attrs)
+	if objectDiags.HasError() {
+		t.Fatalf("building planned object: %v", objectDiags)
+	}
+	planned, setDiags := types.SetValue(
+		types.ObjectType{AttrTypes: portOverrideAttrTypes()},
+		[]attr.Value{plannedObject},
+	)
+	if setDiags.HasError() {
+		t.Fatalf("building planned set: %v", setDiags)
+	}
+
+	got, reconcileDiags := r.reconcilePortOverrides(
+		ctx,
+		planned,
+		[]unifi.DevicePortOverrides{apiOverride},
+	)
+	if reconcileDiags.HasError() {
+		t.Fatalf("reconciling: %v", reconcileDiags)
+	}
+	gotObject, ok := got.Elements()[0].(types.Object)
+	if !ok {
+		t.Fatalf("reconciled set element has type %T, want types.Object", got.Elements()[0])
+	}
+	gotAttrs := gotObject.Attributes()
+	for _, name := range computedBools {
+		if gotAttrs[name].IsUnknown() {
+			t.Errorf("%s remained unknown after reconciliation", name)
+		}
+	}
+}
+
 func Test_deviceResource_portOverridesToFramework(t *testing.T) {
 	type args struct {
 		ctx context.Context

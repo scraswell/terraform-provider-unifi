@@ -1226,11 +1226,23 @@ func (r *deviceResource) Create(
 			return
 		}
 	}
-	// Restore port_override from plan. The API returns ALL ports (e.g. 32) but we
-	// only manage a subset (e.g. 27). Terraform's post-apply consistency check
-	// requires the set length to match the plan. On subsequent Read, the full
-	// port state will be loaded, which may cause a one-time update on next apply.
-	plan.PortOverride = plannedPortOverride
+	// Rebuild the planned subset from the API response. Besides keeping the set
+	// length aligned with configuration, this resolves Optional+Computed fields
+	// that Terraform leaves unknown when a nested set element changes.
+	if freshDevice != nil && !plannedPortOverride.IsNull() && !plannedPortOverride.IsUnknown() {
+		resolved, reconcileDiags := r.reconcilePortOverrides(
+			ctx,
+			plannedPortOverride,
+			freshDevice.PortOverrides,
+		)
+		resp.Diagnostics.Append(reconcileDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		plan.PortOverride = resolved
+	} else {
+		plan.PortOverride = plannedPortOverride
+	}
 
 	// Restore plan-only flags
 	plan.AllowAdoption = allowAdoption
@@ -1454,8 +1466,25 @@ func (r *deviceResource) Update(
 		}
 	}
 
-	// Restore port_override from plan (API returns all ports, plan has subset)
-	plan.PortOverride = plannedPortOverride
+	// Rebuild the planned subset from the API response. Restoring the raw plan
+	// here is invalid when Terraform has marked Optional+Computed attributes in
+	// a changed set element unknown: providers must return concrete values after
+	// apply. Reconciliation preserves the managed subset while resolving those
+	// values from the controller.
+	if freshDevice != nil && !plannedPortOverride.IsNull() && !plannedPortOverride.IsUnknown() {
+		resolved, reconcileDiags := r.reconcilePortOverrides(
+			ctx,
+			plannedPortOverride,
+			freshDevice.PortOverrides,
+		)
+		resp.Diagnostics.Append(reconcileDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		plan.PortOverride = resolved
+	} else {
+		plan.PortOverride = plannedPortOverride
+	}
 
 	// Re-assert the planned LED values when the user configured them, so an
 	// asynchronously-applied controller value doesn't trip the consistency
@@ -2393,6 +2422,50 @@ func (r *deviceResource) reconcilePortOverrides(
 			members, memberDiags := types.ListValue(types.Int64Type, memberValues)
 			diags.Append(memberDiags...)
 			updated.AggregateMembers = members
+		}
+
+		// Optional+Computed values inside a SetNestedBlock are commonly unknown in
+		// the plan whenever any field in the element changes. They must all be
+		// concrete in the post-apply result. Resolve them from the API even when
+		// the prior value is unknown (unknown is deliberately distinct from null).
+		if !pm.Autoneg.IsNull() {
+			updated.Autoneg = types.BoolValue(apiPO.Autoneg)
+		}
+		if !pm.EgressRateLimitKbpsEnabled.IsNull() {
+			updated.EgressRateLimitKbpsEnabled = types.BoolValue(apiPO.EgressRateLimitKbpsEnabled)
+		}
+		if !pm.FlowControlEnabled.IsNull() {
+			updated.FlowControlEnabled = types.BoolValue(apiPO.FlowControlEnabled)
+		}
+		if !pm.FullDuplex.IsNull() {
+			updated.FullDuplex = types.BoolValue(apiPO.FullDuplex)
+		}
+		if !pm.Isolation.IsNull() {
+			updated.Isolation = types.BoolValue(apiPO.Isolation)
+		}
+		if !pm.LldpmedEnabled.IsNull() {
+			updated.LldpmedEnabled = types.BoolValue(apiPO.LldpmedEnabled)
+		}
+		if !pm.LldpmedNotifyEnabled.IsNull() {
+			updated.LldpmedNotifyEnabled = types.BoolValue(apiPO.LldpmedNotifyEnabled)
+		}
+		if !pm.PortKeepaliveEnabled.IsNull() {
+			updated.PortKeepaliveEnabled = types.BoolValue(apiPO.PortKeepaliveEnabled)
+		}
+		if !pm.PortSecurityEnabled.IsNull() {
+			updated.PortSecurityEnabled = types.BoolValue(apiPO.PortSecurityEnabled)
+		}
+		if !pm.StormctrlBroadcastEnabled.IsNull() {
+			updated.StormctrlBroadcastEnabled = types.BoolValue(apiPO.StormctrlBroadcastastEnabled)
+		}
+		if !pm.StormctrlMcastEnabled.IsNull() {
+			updated.StormctrlMcastEnabled = types.BoolValue(apiPO.StormctrlMcastEnabled)
+		}
+		if !pm.StormctrlUcastEnabled.IsNull() {
+			updated.StormctrlUcastEnabled = types.BoolValue(apiPO.StormctrlUcastEnabled)
+		}
+		if !pm.StpPortMode.IsNull() {
+			updated.StpPortMode = types.BoolValue(apiPO.StpPortMode)
 		}
 
 		objVal, objDiags := types.ObjectValueFrom(ctx, updated.AttributeTypes(), updated)
