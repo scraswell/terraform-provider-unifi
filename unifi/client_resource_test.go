@@ -2,7 +2,9 @@ package unifi
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
@@ -990,8 +992,7 @@ func portOverrideSetWith(t *testing.T, overrides map[string]attr.Value) types.Se
 
 // TestFrameworkToPortOverrides_AggregateOpMode guards #177: to form an SFP+ link
 // aggregation the port's op_mode must be written as "aggregate" alongside the
-// aggregate_members. op_mode is otherwise skipped (default "switch") so gateway
-// devices that reject op_mode on PUT keep working (#213).
+// aggregate_members.
 func TestFrameworkToPortOverrides_AggregateOpMode(t *testing.T) {
 	ctx := context.Background()
 	r := &deviceResource{}
@@ -1027,10 +1028,9 @@ func TestFrameworkToPortOverrides_AggregateOpMode(t *testing.T) {
 	}
 }
 
-// TestFrameworkToPortOverrides_SwitchOpModeOmitted ensures the default "switch"
-// op_mode is not sent on the wire (it has omitempty), preserving the gateway
-// write fix (#213).
-func TestFrameworkToPortOverrides_SwitchOpModeOmitted(t *testing.T) {
+// TestFrameworkToPortOverrides_SwitchOpModeExplicit ensures "switch" reaches
+// the controller so Terraform can retire a stale link aggregation.
+func TestFrameworkToPortOverrides_SwitchOpModeExplicit(t *testing.T) {
 	ctx := context.Background()
 	r := &deviceResource{}
 
@@ -1046,8 +1046,39 @@ func TestFrameworkToPortOverrides_SwitchOpModeOmitted(t *testing.T) {
 	if len(pos) != 1 {
 		t.Fatalf("got %d port overrides, want 1", len(pos))
 	}
-	if pos[0].OpMode != "" {
-		t.Errorf("OpMode = %q, want empty (omitted) for the switch default", pos[0].OpMode)
+	if pos[0].OpMode != "switch" {
+		t.Errorf("OpMode = %q, want switch for aggregation reset", pos[0].OpMode)
+	}
+}
+
+func TestFrameworkToPortOverrides_STPGuardsPreserveExplicitFalse(t *testing.T) {
+	r := &deviceResource{}
+	set := portOverrideSetWith(t, map[string]attr.Value{
+		"index":                  types.Int64Value(37),
+		"stp_edge_state":         types.StringValue("disabled"),
+		"stp_bpdu_guard_enabled": types.BoolValue(false),
+	})
+
+	pos, diags := r.frameworkToPortOverrides(context.Background(), set)
+	if diags.HasError() {
+		t.Fatalf("frameworkToPortOverrides errored: %v", diags)
+	}
+	if len(pos) != 1 {
+		t.Fatalf("got %d port overrides, want 1", len(pos))
+	}
+	po := pos[0]
+	if po.StpEdgeState != "disabled" {
+		t.Fatalf("StpEdgeState = %q, want disabled", po.StpEdgeState)
+	}
+	if po.StpBpduGuardEnabled == nil || *po.StpBpduGuardEnabled {
+		t.Fatalf("StpBpduGuardEnabled = %#v, want explicit false", po.StpBpduGuardEnabled)
+	}
+	payload, err := json.Marshal(po)
+	if err != nil {
+		t.Fatalf("marshal port override: %v", err)
+	}
+	if !strings.Contains(string(payload), `"stp_bpdu_guard_enabled":false`) {
+		t.Fatalf("explicit false missing from payload: %s", payload)
 	}
 }
 

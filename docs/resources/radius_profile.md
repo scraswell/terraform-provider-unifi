@@ -72,7 +72,7 @@ resource "unifi_wlan" "corp" {
 - `acct_server` (Block List) RADIUS accounting servers. (see [below for nested schema](#nestedblock--acct_server))
 - `auth_server` (Block List) RADIUS authentication servers. (see [below for nested schema](#nestedblock--auth_server))
 - `interim_update_enabled` (Boolean) Specifies whether to use interim_update.
-- `interim_update_interval` (String) Specifies the RADIUS interim update interval, as a Go duration string (e.g. `1h`, `3600s`). Defaults to `1h0m0s`.
+- `interim_update_interval` (String) Specifies the RADIUS interim update interval, as a Go duration string (e.g. `1h`, `3600s`).
 - `site` (String) The name of the site to associate the settings with.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 - `use_usg_acct_server` (Boolean) Specifies whether to use usg as a RADIUS accounting server.

@@ -189,6 +189,8 @@ type portOverrideModel struct {
 	StormctrlUcastEnabled      types.Bool           `tfsdk:"stormctrl_ucast_enabled"`
 	StormctrlUcastLevel        types.Int64          `tfsdk:"stormctrl_ucast_level"`
 	StormctrlUcastRate         types.Int64          `tfsdk:"stormctrl_ucast_rate"`
+	StpBpduGuardEnabled        types.Bool           `tfsdk:"stp_bpdu_guard_enabled"`
+	StpEdgeState               types.String         `tfsdk:"stp_edge_state"`
 	StpPortMode                types.Bool           `tfsdk:"stp_port_mode"`
 	TaggedNetworkIDs           types.Set            `tfsdk:"tagged_networkconf_ids"`
 	TaggedVLANMgmt             types.String         `tfsdk:"tagged_vlan_mgmt"`
@@ -763,7 +765,7 @@ func (r *deviceResource) Schema(
 						"op_mode": schema.StringAttribute{
 							Description: "Operating mode of the port: `switch` (default), `mirror`, or `aggregate`. " +
 								"Set `aggregate` on the lead port of an SFP+/link-aggregation (LAG) group and list the member ports in `aggregate_members`. " +
-								"Only written when not `switch`, as gateway devices (UDM) reject op_mode on update.",
+								"Set `switch` to retire an existing aggregation and return the port to normal switching.",
 							Optional: true,
 							Computed: true,
 							Default:  stringdefault.StaticString("switch"),
@@ -946,6 +948,19 @@ func (r *deviceResource) Schema(
 						},
 						"stp_port_mode": schema.BoolAttribute{
 							Description: "STP port mode.",
+							Optional:    true,
+							Computed:    true,
+						},
+						"stp_edge_state": schema.StringAttribute{
+							Description: "RSTP port role: `enabled` for an Edge port, `disabled` for a Participant port, or `auto` for controller selection.",
+							Optional:    true,
+							Computed:    true,
+							Validators: []validator.String{
+								stringvalidator.OneOf("auto", "enabled", "disabled"),
+							},
+						},
+						"stp_bpdu_guard_enabled": schema.BoolAttribute{
+							Description: "Enable BPDU guard on this port. Explicit `false` is preserved on the wire.",
 							Optional:    true,
 							Computed:    true,
 						},
@@ -1775,10 +1790,18 @@ func (r *deviceResource) updateDevice(
 	// gateways reject.
 	var portOverrides []unifi.DevicePortOverrides
 	if len(deviceReq.PortOverrides) > 0 {
-		portOverrides = mergePortOverridesByIndex(
+		var mergeErr error
+		portOverrides, mergeErr = mergePortOverridesByIndex(
 			currentDevice.PortOverrides,
 			deviceReq.PortOverrides,
 		)
+		if mergeErr != nil {
+			diags.AddError(
+				"Error Updating Device",
+				fmt.Sprintf("Could not safely merge port overrides: %s", mergeErr),
+			)
+			return diags
+		}
 	} else {
 		// No port_override blocks are managed in config (e.g. gateways/APs and
 		// switches we only touch for name/LED/radio). Echo the controller's current
@@ -2154,9 +2177,9 @@ func (r *deviceResource) modelToAPIDevice(
 // appended entries so the result is deterministic.
 func mergePortOverridesByIndex(
 	current, declared []unifi.DevicePortOverrides,
-) []unifi.DevicePortOverrides {
+) ([]unifi.DevicePortOverrides, error) {
 	if len(declared) == 0 {
-		return current
+		return current, nil
 	}
 
 	declaredByIdx := make(map[int64]int, len(declared))
@@ -2171,7 +2194,11 @@ func mergePortOverridesByIndex(
 	for _, po := range current {
 		if po.PortIDX != nil {
 			if i, ok := declaredByIdx[*po.PortIDX]; ok {
-				merged = append(merged, declared[i])
+				updated, err := mergePortOverrideFields(po, declared[i])
+				if err != nil {
+					return nil, err
+				}
+				merged = append(merged, updated)
 				used[i] = true
 				continue
 			}
@@ -2185,7 +2212,52 @@ func mergePortOverridesByIndex(
 			merged = append(merged, po)
 		}
 	}
-	return merged
+	return merged, nil
+}
+
+// mergePortOverrideFields overlays only fields that would be present in the
+// declared override's JSON payload. This matches the SDK's presence semantics:
+// pointer false values remain explicit, while omitted Terraform attributes do
+// not erase unrelated controller settings such as VLAN, PoE, or port profile.
+func mergePortOverrideFields(
+	current, declared unifi.DevicePortOverrides,
+) (unifi.DevicePortOverrides, error) {
+	currentJSON, err := json.Marshal(current)
+	if err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("marshal current port override: %w", err)
+	}
+	declaredJSON, err := json.Marshal(declared)
+	if err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("marshal declared port override: %w", err)
+	}
+
+	var currentFields map[string]json.RawMessage
+	if err := json.Unmarshal(currentJSON, &currentFields); err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("decode current port override: %w", err)
+	}
+	var declaredFields map[string]json.RawMessage
+	if err := json.Unmarshal(declaredJSON, &declaredFields); err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("decode declared port override: %w", err)
+	}
+	for name, value := range declaredFields {
+		currentFields[name] = value
+	}
+
+	// Switching a lead port back to normal operation retires any previous LAG.
+	// Do not carry stale members into the full-array PUT.
+	if declared.OpMode == "switch" {
+		delete(currentFields, "aggregate_members")
+	}
+
+	mergedJSON, err := json.Marshal(currentFields)
+	if err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("marshal merged port override: %w", err)
+	}
+	var merged unifi.DevicePortOverrides
+	if err := json.Unmarshal(mergedJSON, &merged); err != nil {
+		return unifi.DevicePortOverrides{}, fmt.Errorf("decode merged port override: %w", err)
+	}
+	return merged, nil
 }
 
 // reconcilePortOverrides rebuilds the port_override Set from the API response,
@@ -2278,12 +2350,49 @@ func (r *deviceResource) reconcilePortOverrides(
 				updated.ExcludedNetworkIDs = emptySet
 			}
 		}
+		if !pm.TaggedNetworkIDs.IsNull() && !pm.TaggedNetworkIDs.IsUnknown() {
+			sorted := append([]string(nil), apiPO.TaggedNetworkIDs...)
+			sort.Strings(sorted)
+			values := make([]attr.Value, 0, len(sorted))
+			for _, id := range sorted {
+				values = append(values, types.StringValue(id))
+			}
+			setValue, setDiags := types.SetValue(types.StringType, values)
+			diags.Append(setDiags...)
+			updated.TaggedNetworkIDs = setValue
+		}
 		if !pm.PortProfileID.IsNull() {
 			if apiPO.PortProfileID == "" {
 				updated.PortProfileID = types.StringNull()
 			} else {
 				updated.PortProfileID = types.StringValue(apiPO.PortProfileID)
 			}
+		}
+		if !pm.OpMode.IsNull() && !pm.OpMode.IsUnknown() {
+			if apiPO.OpMode == "" {
+				updated.OpMode = types.StringNull()
+			} else {
+				updated.OpMode = types.StringValue(apiPO.OpMode)
+			}
+		}
+		if !pm.StpEdgeState.IsNull() && !pm.StpEdgeState.IsUnknown() {
+			if apiPO.StpEdgeState == "" {
+				updated.StpEdgeState = types.StringNull()
+			} else {
+				updated.StpEdgeState = types.StringValue(apiPO.StpEdgeState)
+			}
+		}
+		if !pm.StpBpduGuardEnabled.IsNull() && !pm.StpBpduGuardEnabled.IsUnknown() {
+			updated.StpBpduGuardEnabled = types.BoolPointerValue(apiPO.StpBpduGuardEnabled)
+		}
+		if !pm.AggregateMembers.IsNull() && !pm.AggregateMembers.IsUnknown() {
+			memberValues := make([]attr.Value, 0, len(apiPO.AggregateMembers))
+			for _, member := range apiPO.AggregateMembers {
+				memberValues = append(memberValues, types.Int64Value(member))
+			}
+			members, memberDiags := types.ListValue(types.Int64Type, memberValues)
+			diags.Append(memberDiags...)
+			updated.AggregateMembers = members
 		}
 
 		objVal, objDiags := types.ObjectValueFrom(ctx, updated.AttributeTypes(), updated)
@@ -2341,6 +2450,12 @@ func (r *deviceResource) portOverridesToFramework(
 			model.OpMode = types.StringNull()
 		} else {
 			model.OpMode = types.StringValue(po.OpMode)
+		}
+
+		if po.StpEdgeState == "" {
+			model.StpEdgeState = types.StringNull()
+		} else {
+			model.StpEdgeState = types.StringValue(po.StpEdgeState)
 		}
 
 		if po.PoeMode == "" {
@@ -2410,6 +2525,7 @@ func (r *deviceResource) portOverridesToFramework(
 		model.StormctrlBroadcastEnabled = types.BoolValue(po.StormctrlBroadcastastEnabled)
 		model.StormctrlMcastEnabled = types.BoolValue(po.StormctrlMcastEnabled)
 		model.StormctrlUcastEnabled = types.BoolValue(po.StormctrlUcastEnabled)
+		model.StpBpduGuardEnabled = types.BoolPointerValue(po.StpBpduGuardEnabled)
 		model.StpPortMode = types.BoolValue(po.StpPortMode)
 
 		// Int64 attributes
@@ -2472,12 +2588,22 @@ func (r *deviceResource) portOverridesToFramework(
 			model.ExcludedNetworkIDs = setVal
 		}
 
-		// FIX (#235): the pinned go-unifi SDK has no TaggedNetworkIDs field, so
-		// nothing populates it below. Without this assignment the model field
-		// stays an untyped zero-value types.Set, which makes ObjectValueFrom
-		// emit a "types.SetType[!!! MISSING TYPE !!!]" Value Conversion Error
-		// against the schema's SetAttribute{ElementType: types.StringType}.
-		model.TaggedNetworkIDs = types.SetNull(types.StringType)
+		if len(po.TaggedNetworkIDs) == 0 {
+			model.TaggedNetworkIDs = types.SetNull(types.StringType)
+		} else {
+			sortedTagged := append([]string(nil), po.TaggedNetworkIDs...)
+			sort.Strings(sortedTagged)
+			taggedValues := make([]attr.Value, 0, len(sortedTagged))
+			for _, id := range sortedTagged {
+				taggedValues = append(taggedValues, types.StringValue(id))
+			}
+			setVal, setDiags := types.SetValue(types.StringType, taggedValues)
+			diags.Append(setDiags...)
+			if diags.HasError() {
+				continue
+			}
+			model.TaggedNetworkIDs = setVal
+		}
 
 		if len(po.MulticastRouterNetworkIDs) == 0 {
 			model.MulticastRouterNetworkIDs = types.SetNull(types.StringType)
@@ -2560,16 +2686,14 @@ func (r *deviceResource) frameworkToPortOverrides(
 			if !model.PortProfileID.IsNull() {
 				po.PortProfileID = model.PortProfileID.ValueString()
 			}
-			// op_mode is only written when the port runs in a non-default mode
-			// (aggregate/mirror). Sending op_mode on a PUT for gateway devices
-			// (UDM) is rejected — see #213 — but those ports never use
-			// aggregate/mirror, so they stay at the "switch" default and we skip
-			// it. Writing it for the non-default cases is required to form an
-			// SFP+ link aggregation (#177), which otherwise never engages because
-			// aggregate_members is sent without ever switching op_mode.
+			// op_mode is presence-sensitive. In particular, an explicit "switch"
+			// resets a stale aggregate on current UniFi gateway firmware.
 			if !model.OpMode.IsNull() && !model.OpMode.IsUnknown() &&
-				model.OpMode.ValueString() != "" && model.OpMode.ValueString() != "switch" {
+				model.OpMode.ValueString() != "" {
 				po.OpMode = model.OpMode.ValueString()
+			}
+			if !model.StpEdgeState.IsNull() && !model.StpEdgeState.IsUnknown() {
+				po.StpEdgeState = model.StpEdgeState.ValueString()
 			}
 			if !model.PoeMode.IsNull() {
 				po.PoeMode = model.PoeMode.ValueString()
@@ -2612,6 +2736,10 @@ func (r *deviceResource) frameworkToPortOverrides(
 			po.StormctrlBroadcastastEnabled = model.StormctrlBroadcastEnabled.ValueBool()
 			po.StormctrlMcastEnabled = model.StormctrlMcastEnabled.ValueBool()
 			po.StormctrlUcastEnabled = model.StormctrlUcastEnabled.ValueBool()
+			if !model.StpBpduGuardEnabled.IsNull() &&
+				!model.StpBpduGuardEnabled.IsUnknown() {
+				po.StpBpduGuardEnabled = model.StpBpduGuardEnabled.ValueBoolPointer()
+			}
 			po.StpPortMode = model.StpPortMode.ValueBool()
 
 			// Int64 attributes
@@ -2686,6 +2814,15 @@ func (r *deviceResource) frameworkToPortOverrides(
 					return nil, diags
 				}
 				po.MulticastRouterNetworkIDs = multicastIDs
+			}
+
+			if !model.TaggedNetworkIDs.IsNull() {
+				var taggedIDs []string
+				diags.Append(model.TaggedNetworkIDs.ElementsAs(ctx, &taggedIDs, true)...)
+				if diags.HasError() {
+					return nil, diags
+				}
+				po.TaggedNetworkIDs = taggedIDs
 			}
 
 			if !model.PortSecurityMACAddress.IsNull() {
@@ -2822,6 +2959,8 @@ func portOverrideAttrTypes() map[string]attr.Type {
 		"stormctrl_ucast_enabled":          types.BoolType,
 		"stormctrl_ucast_level":            types.Int64Type,
 		"stormctrl_ucast_rate":             types.Int64Type,
+		"stp_bpdu_guard_enabled":           types.BoolType,
+		"stp_edge_state":                   types.StringType,
 		"stp_port_mode":                    types.BoolType,
 		"tagged_networkconf_ids":           types.SetType{ElemType: types.StringType},
 		"tagged_vlan_mgmt":                 types.StringType,

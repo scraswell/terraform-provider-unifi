@@ -17,6 +17,14 @@ run = "dagger call test --src=."
 description = "Build the provider in Dagger"
 run = "dagger call build --src=."
 
+[tasks.update-modules]
+description = "Update and pin Go modules in the Dagger environment"
+run = "dagger call update-modules --src=. export --path=."
+
+[tasks.generate-docs]
+description = "Generate provider documentation in Dagger"
+run = "dagger call generate-docs --src=. export --path=."
+
 [tasks.ci]
 description = "Run the complete pinned provider quality gate in Dagger"
 run = "dagger call ci --src=."

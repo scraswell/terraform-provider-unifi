@@ -165,7 +165,7 @@ Optional:
 - `multicast_router_networkconf_ids` (Set of String) List of network IDs for multicast router.
 - `name` (String) Human-readable name of the port.
 - `native_networkconf_id` (String) Native network ID (VLAN).
-- `op_mode` (String) Operating mode of the port: `switch` (default), `mirror`, or `aggregate`. Set `aggregate` on the lead port of an SFP+/link-aggregation (LAG) group and list the member ports in `aggregate_members`. Only written when not `switch`, as gateway devices (UDM) reject op_mode on update.
+- `op_mode` (String) Operating mode of the port: `switch` (default), `mirror`, or `aggregate`. Set `aggregate` on the lead port of an SFP+/link-aggregation (LAG) group and list the member ports in `aggregate_members`. Set `switch` to retire an existing aggregation and return the port to normal switching.
 - `poe_mode` (String) PoE mode of the port; valid values are `auto`, `pasv24`, `passthrough`, and `off`.
 - `port_keepalive_enabled` (Boolean) Enable port keepalive.
 - `port_profile_id` (String) ID of the Port Profile used on this port.
@@ -187,6 +187,8 @@ Optional:
 - `stormctrl_ucast_enabled` (Boolean) Enable unicast storm control.
 - `stormctrl_ucast_level` (Number) Unicast storm control level.
 - `stormctrl_ucast_rate` (Number) Unicast storm control rate.
+- `stp_bpdu_guard_enabled` (Boolean) Enable BPDU guard on this port. Explicit `false` is preserved on the wire.
+- `stp_edge_state` (String) RSTP port role: `enabled` for an Edge port, `disabled` for a Participant port, or `auto` for controller selection.
 - `stp_port_mode` (Boolean) STP port mode.
 - `tagged_networkconf_ids` (Set of String) List of network IDs to tag on this port.
 - `tagged_vlan_mgmt` (String) Tagged VLAN management.

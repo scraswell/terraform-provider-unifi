@@ -1,4 +1,5 @@
 [tools]
 gitleaks = "8.30.1"
-go = "1.25.9"
+go = "1.26.6"
 golangci-lint = "2.12.2"
+terraform = "1.15.8"

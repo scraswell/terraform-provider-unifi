@@ -33,7 +33,10 @@ func TestMergePortOverridesByIndex(t *testing.T) {
 		declared := []unifi.DevicePortOverrides{
 			{PortIDX: ptrInt64(5), NATiveNetworkID: "vlan-z"},
 		}
-		got := mergePortOverridesByIndex(current, declared)
+		got, err := mergePortOverridesByIndex(current, declared)
+		if err != nil {
+			t.Fatalf("merge port overrides: %v", err)
+		}
 		byIdx := indexOverrides(got)
 		if len(got) != 3 {
 			t.Fatalf("merged length = %d, want 3 (ports 3,4 must survive): %+v", len(got), got)
@@ -50,7 +53,10 @@ func TestMergePortOverridesByIndex(t *testing.T) {
 		declared := []unifi.DevicePortOverrides{
 			{PortIDX: ptrInt64(7), NATiveNetworkID: "vlan-new"},
 		}
-		got := mergePortOverridesByIndex(current, declared)
+		got, err := mergePortOverridesByIndex(current, declared)
+		if err != nil {
+			t.Fatalf("merge port overrides: %v", err)
+		}
 		byIdx := indexOverrides(got)
 		if len(got) != 4 {
 			t.Fatalf("merged length = %d, want 4: %+v", len(got), got)
@@ -61,9 +67,60 @@ func TestMergePortOverridesByIndex(t *testing.T) {
 	})
 
 	t.Run("no declared overrides returns current unchanged", func(t *testing.T) {
-		got := mergePortOverridesByIndex(current, nil)
+		got, err := mergePortOverridesByIndex(current, nil)
+		if err != nil {
+			t.Fatalf("merge port overrides: %v", err)
+		}
 		if len(got) != 3 {
 			t.Errorf("merged length = %d, want 3", len(got))
+		}
+	})
+
+	t.Run("declared fields preserve unrelated settings on the same port", func(t *testing.T) {
+		currentPort := unifi.DevicePortOverrides{
+			PortIDX:         ptrInt64(5),
+			NATiveNetworkID: "vlan-a",
+			PoeMode:         "auto",
+			PortProfileID:   "profile-a",
+		}
+		declared := []unifi.DevicePortOverrides{{
+			PortIDX:             ptrInt64(5),
+			StpEdgeState:        "disabled",
+			StpBpduGuardEnabled: boolPtr(false),
+		}}
+		got, err := mergePortOverridesByIndex(
+			[]unifi.DevicePortOverrides{currentPort},
+			declared,
+		)
+		if err != nil {
+			t.Fatalf("merge port overrides: %v", err)
+		}
+		port := indexOverrides(got)[5]
+		if port.NATiveNetworkID != "vlan-a" || port.PoeMode != "auto" ||
+			port.PortProfileID != "profile-a" {
+			t.Fatalf("unrelated port settings were lost: %+v", port)
+		}
+		if port.StpEdgeState != "disabled" || port.StpBpduGuardEnabled == nil ||
+			*port.StpBpduGuardEnabled {
+			t.Fatalf("declared guard settings were not overlaid: %+v", port)
+		}
+	})
+
+	t.Run("switch mode retires stale aggregate members", func(t *testing.T) {
+		got, err := mergePortOverridesByIndex(
+			[]unifi.DevicePortOverrides{{
+				PortIDX:          ptrInt64(1),
+				OpMode:           "aggregate",
+				AggregateMembers: []int64{1, 2},
+			}},
+			[]unifi.DevicePortOverrides{{PortIDX: ptrInt64(1), OpMode: "switch"}},
+		)
+		if err != nil {
+			t.Fatalf("merge port overrides: %v", err)
+		}
+		port := indexOverrides(got)[1]
+		if port.OpMode != "switch" || len(port.AggregateMembers) != 0 {
+			t.Fatalf("stale aggregate survived reset: %+v", port)
 		}
 	})
 }
@@ -869,10 +926,14 @@ func Test_mergePortOverridesByIndex(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := mergePortOverridesByIndex(
+			got, err := mergePortOverridesByIndex(
 				tt.args.current,
 				tt.args.declared,
-			); !reflect.DeepEqual(
+			)
+			if err != nil {
+				t.Fatalf("mergePortOverridesByIndex() error = %v", err)
+			}
+			if !reflect.DeepEqual(
 				got,
 				tt.want,
 			) {

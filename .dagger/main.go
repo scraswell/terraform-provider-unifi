@@ -73,6 +73,22 @@ func (m *UnifiProvider) Build(src *dagger.Directory) *dagger.Container {
 		WithExec([]string{"mise", "exec", "--", "go", "build", "-o", "/out/terraform-provider-unifi", "."})
 }
 
+// UpdateModules updates direct and transitive Go modules and returns the
+// resulting pinned source tree.
+func (m *UnifiProvider) UpdateModules(src *dagger.Directory) *dagger.Directory {
+	return m.Base(src).
+		WithExec([]string{"mise", "exec", "--", "go", "get", "-u", "./..."}).
+		WithExec([]string{"mise", "exec", "--", "go", "mod", "tidy"}).
+		Directory(workDir)
+}
+
+// GenerateDocs regenerates provider documentation from the current schema.
+func (m *UnifiProvider) GenerateDocs(src *dagger.Directory) *dagger.Directory {
+	return m.Base(src).
+		WithExec([]string{"mise", "exec", "--", "go", "generate", "."}).
+		Directory(workDir)
+}
+
 // Ci runs the complete hermetic quality gate.
 func (m *UnifiProvider) Ci(src *dagger.Directory) *dagger.Container {
 	return m.Base(src).
