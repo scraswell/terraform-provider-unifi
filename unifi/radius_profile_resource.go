@@ -156,11 +156,10 @@ func (r *radiusProfileResource) Schema(
 			},
 			"interim_update_interval": schema.StringAttribute{
 				MarkdownDescription: "Specifies the RADIUS interim update interval, as a Go " +
-					"duration string (e.g. `1h`, `3600s`). Defaults to `1h0m0s`.",
+					"duration string (e.g. `1h`, `3600s`).",
 				CustomType: timetypes.GoDurationType{},
 				Optional:   true,
 				Computed:   true,
-				Default:    stringdefault.StaticString("1h0m0s"),
 				Validators: []validator.String{
 					validators.GoDurationMultipleOf(time.Second),
 				},

@@ -6,6 +6,7 @@ import (
 
 	fwlist "github.com/hashicorp/terraform-plugin-framework/list"
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	fwschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/querycheck"
@@ -539,6 +540,14 @@ func Test_radiusProfileResource_Schema(t *testing.T) {
 		if _, ok := resp.Schema.Attributes[attr]; !ok {
 			t.Errorf("missing attribute %q", attr)
 		}
+	}
+
+	interval, ok := resp.Schema.Attributes["interim_update_interval"].(fwschema.StringAttribute)
+	if !ok {
+		t.Fatal("interim_update_interval is not a string attribute")
+	}
+	if interval.Default != nil {
+		t.Error("interim_update_interval must not impose a default when the controller omits it")
 	}
 }
 

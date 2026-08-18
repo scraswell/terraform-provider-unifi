@@ -1650,6 +1650,12 @@ func (r *deviceResource) ImportState(
 // plan (user-configured, or state-inherited via the list's UseStateForUnknown),
 // its non-zero sub-fields (channel, tx_power, …) also travel in the PUT; sending
 // back the values the controller already returned is idempotent.
+//
+// stp_version and stp_priority must also be copied from the planned device. The
+// hand-listed payload previously dropped both fields, so port overrides in the
+// same update were accepted while the switch kept its existing STP settings.
+// StpPriority is a pointer specifically so priority 0 remains present on the
+// wire despite omitempty.
 func buildMinimalUpdateDevice(
 	deviceReq, currentDevice *unifi.Device,
 	portOverrides []unifi.DevicePortOverrides,
@@ -1667,6 +1673,8 @@ func buildMinimalUpdateDevice(
 		SwitchVLANEnabled:          deviceReq.SwitchVLANEnabled,
 		MeshStaVapEnabled:          deviceReq.MeshStaVapEnabled,
 		RadioTable:                 deviceReq.RadioTable,
+		StpVersion:                 deviceReq.StpVersion,
+		StpPriority:                deviceReq.StpPriority,
 	}
 	if currentDevice != nil {
 		minimalDevice.State = currentDevice.State
@@ -1765,7 +1773,7 @@ func (r *deviceResource) updateDevice(
 	// ports. With no override declared we echo the controller's current overrides
 	// (below) so the diff never emits `port_overrides: null`, which UDM/Dream Machine
 	// gateways reject.
-	portOverrides := deviceReq.PortOverrides
+	var portOverrides []unifi.DevicePortOverrides
 	if len(deviceReq.PortOverrides) > 0 {
 		portOverrides = mergePortOverridesByIndex(
 			currentDevice.PortOverrides,
